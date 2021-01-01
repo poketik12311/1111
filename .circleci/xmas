@@ -1,0 +1,221 @@
+local ffi = require "ffi"
+local gif_decoder = require "gamesense/gif_decoder"
+
+local ui_set, ui_get, ui_reference = ui.set, ui.get, ui.reference
+local set_event_callback = client.set_event_callback
+local get_local_player = entity.get_local_player
+local set_clan_tag = client.set_clan_tag
+local curtime = globals.curtime
+local realtime = globals.realtime
+local get_prop = entity.get_prop
+local screen_size = client.screen_size
+local random_int = client.random_int
+local delay_call = client.delay_call
+local userid_to_entindex = client.userid_to_entindex
+local load_png = renderer.load_png
+local menu_open, menu_position, menu_size = ui.is_menu_open, ui.menu_position, ui.menu_size
+local gradient = renderer.gradient
+local indicator = renderer.indicator
+local set_clan_tag = client.set_clan_tag
+
+local xmas_clantag = {
+    "⠀⠀xmas⠀",
+    "s⠀⠀xma⠀",
+    "as⠀⠀xm⠀",
+    "mas⠀⠀x⠀",
+    "xmas⠀⠀⠀",
+    "⠀xmas⠀⠀",
+}
+
+local player_enabled, player_color = ui_reference("Visuals", "Colored models", "Player") 
+local player_occ_enabled, player_occ_color = ui_reference("Visuals", "Colored models", "Player behind wall")
+local orig_player_r, orig_player_g, orig_player_b, orig_player_a = ui_get(player_color)
+local orig_player_occ_r, orig_player_occ_g, orig_player_occ_b, orig_player_occ_a = ui_get(player_occ_color)
+local reference_yaw, reference_yaw_slider = ui_reference("AA", "Anti-aimbot angles", "Yaw")
+local ref_body_yaw, ref_body_yaw_value = ui_reference("AA", "Anti-aimbot angles", "Body yaw")
+local ref_fake_limit = ui_reference("AA", "Anti-aimbot angles", "Fake yaw limit")
+local ref_pitch = ui_reference("AA", "Anti-aimbot angles", "Pitch")
+local ref_yaw, ref_yaw_value = ui_reference("AA", "Anti-aimbot angles", "Yaw")
+
+local draw_grinch, grinch_start_time = false, 0
+local santa_x, santa_y, santa_start_time = 0, 0, 0
+local snowflake_x, snowflake_y, snowflake_velocity, snowflake_start_time, snowflake_count = {0, 0, 0, 0, 0, 0, 0, 0}, {0, 0, 0, 0, 0, 0, 0, 0}, {0, 0, 0, 0, 0, 0, 0, 0}, {0, 0, 0, 0, 0, 0, 0, 0}, 8
+
+local clantag_stage = 1
+
+ffi.cdef[[
+    typedef void(__thiscall *PlaySound_t )(void*, const char*);
+]]
+
+local interface_ptr = ffi.typeof("void***")
+local raw_vgui_surface = client.create_interface("vguimatsurface.dll", "VGUI_Surface031")
+local vgui_surface = ffi.cast(interface_ptr, raw_vgui_surface)
+local vgui_surface_vtbl = vgui_surface[0]
+local raw_play_sound = vgui_surface_vtbl[82]
+
+local play_sound = ffi.cast("PlaySound_t", raw_play_sound)
+
+local grinch_gif = gif_decoder.load_gif(readfile("grinch.gif") or error("Ur not festive enough"))
+local santa_gif = gif_decoder.load_gif(readfile("santa.gif") or error("Ur not festive enough"))
+local snowflake_gif = gif_decoder.load_gif(readfile("snowflake.gif") or error("Ur still not festive enough"))
+
+local xmas_mode = false
+
+local function update_clantag()
+    if xmas_mode == true then
+        set_clan_tag(xmas_clantag[clantag_stage])
+        if clantag_stage == 6 then
+            clantag_stage = 1
+        else
+            clantag_stage = clantag_stage + 1
+        end
+        delay_call(0.6, update_clantag)
+    end
+end
+
+local function toggle_xmas()
+    if xmas_mode == true then
+        clantag_stage = 1
+        update_clantag()
+        local screen_width, screen_height = screen_size()
+        for i=1, snowflake_count do
+            snowflake_x[i] = random_int(0, screen_width)
+            snowflake_start_time[i] = realtime()
+            snowflake_velocity[i] = random_int(1, 5)
+        end
+        play_sound(raw_vgui_surface, "*../../jingle.mp3")
+        orig_player_r, orig_player_g, orig_player_b, orig_player_a = ui_get(player_color)
+        orig_player_occ_r, orig_player_occ_g, orig_player_occ_b, orig_player_occ_a = ui_get(player_occ_color)
+    else
+        set_clan_tag("")
+        ui_set(player_color, orig_player_r, orig_player_g, orig_player_b, orig_player_a)
+        ui_set(player_occ_color, orig_player_occ_r, orig_player_occ_g, orig_player_occ_b, orig_player_occ_a)
+    end
+end
+
+local function on_chat(evt)
+    if evt.entity == get_local_player() then
+        if evt.text == "!xmas" then
+            xmas_mode = not xmas_mode
+            client.log("Christmas mode activated!")
+            toggle_xmas()
+        end
+    end
+end
+
+local function on_paint()
+    if xmas_mode == true then
+        local screen_width, screen_height = screen_size()
+        local norm_color = math.abs(math.sin(curtime()))
+        local color = norm_color * 255
+        indicator(255, color, color, 255, "XMAS")
+        for i=1, snowflake_count do
+            snowflake_gif:draw(realtime() - snowflake_start_time[i], snowflake_x[i], snowflake_y[i], 150, 150, 255, 255, 255, 255)
+            snowflake_y[i] = snowflake_y[i] + snowflake_velocity[i]
+            if snowflake_y[i] >= screen_height + snowflake_gif.height then
+                snowflake_y[i] = 0
+                snowflake_x[i] = random_int(0, screen_width)
+                snowflake_velocity[i] = random_int(1, 5)
+            end
+        end
+    end
+end
+
+local function on_paint_ui()
+    if xmas_mode == true then
+        local screen_width, screen_height = screen_size()
+        if ui_get(player_enabled) == true or ui_get(player_occ_enabled) == true then
+            local norm_color = math.abs(math.sin(curtime()))
+            local color = norm_color * 255
+            if ui_get(player_enabled) == true then
+                ui_set(player_color, 255 - color, color, 0, 255)
+            end
+            if ui_get(player_occ_enabled) == true then
+                ui_set(player_occ_color, color, 255 - color, 0, 255)
+            end
+        end
+
+        if draw_santa == true then
+            santa_gif:draw(realtime() - santa_start_time, santa_x, santa_y, 300, 300, 255, 255, 255, 255)
+        end
+
+        if realtime() - santa_start_time > 1.5 then
+            draw_santa = false
+        end
+
+        if draw_grinch == true then
+            grinch_gif:draw(realtime() - grinch_start_time, screen_width / 2 - (grinch_gif.width / 2), screen_height / 2 - (grinch_gif.height / 2), grinch_gif.width, grinch_gif.height, 255, 255, 255, 255)
+        end
+
+        if realtime() -grinch_start_time > 2 then
+            draw_grinch = false
+        end
+
+        if menu_open() == true then
+            local menu_x, menu_y = menu_position()
+            local menu_width, menu_height = menu_size()
+            gradient(menu_x - 5, menu_y - 5, menu_width + 10, 5, 255, 0, 0, 255, 255, 255, 255, 255, true)
+            gradient(menu_x - 5, menu_y - 5, 5, menu_height + 10, 255, 0, 0, 255, 255, 255, 255, 255, false)
+            gradient(menu_x - 5, menu_y + menu_height, menu_width + 10, 5, 255, 255, 255, 255, 0, 255, 0, 255, true)
+            gradient(menu_x + menu_width, menu_y - 5, 5, menu_height + 10, 255, 255, 255, 255, 0, 255, 0, 255, false)
+        end
+
+    end
+end
+
+local function on_player_death(evt)
+    if xmas_mode == true then
+        local attacker_id = userid_to_entindex(evt.attacker)
+        local dead_id = userid_to_entindex(evt.userid)
+        if dead_id == get_local_player() then
+            draw_grinch = true
+            grinch_start_time = realtime()
+            play_sound(raw_vgui_surface, "*../../evil_laugh.mp3")
+        elseif attacker_id == get_local_player() then
+            draw_santa = true
+            local screen_width, screen_height = screen_size()
+            santa_x = random_int(0, screen_width)
+            santa_y = random_int(0, screen_height)
+            while santa_x + 300 > screen_width do
+                santa_x = random_int(0, screen_width)
+            end
+            while santa_y + 300 > screen_height do
+                santa_y = random_int(0, screen_height)
+            end
+            play_sound(raw_vgui_surface, "*../../hohoho.mp3")
+            santa_start_time = realtime()
+        end
+    end
+end
+
+local legitaae = ui.new_hotkey("LUA", "B", "[Xmas] Legit Anti-Aim on Use Key") -- set this to hotkey if you want to make it work for other keys and just do what i say below
+
+local function legit_aa_values(_type) 
+	--ui.set(ref_pitch, "Off") -- set this shit urself if u wanna make it work on other keys
+	--ui.set(ref_yaw, "Off")
+    ui.set(ref_body_yaw, "Static") -- set these to whatever u want for ur legit aa values
+    ui.set(ref_body_yaw_value, 180)
+    ui.set(ref_fake_limit, 60)
+end
+
+client.set_event_callback("setup_command",function(lol)
+ if weaponn ~= nil and entity.get_classname(weaponn) == "CC4" then -- credits kano for this (u can easily disable this for bomb sites and buy zones)
+            if lol.in_attack == 1 then
+                lol.in_attack = 0 
+                lol.in_use = 1
+            end
+        else
+            if lol.chokedcommands == 0 then
+                lol.in_use = 0
+            end
+        end
+
+    if ui.get(legitaae) then
+        legit_aa_values() 
+    end
+end)
+
+set_event_callback("player_chat", on_chat)
+set_event_callback("paint_ui", on_paint_ui)
+set_event_callback("player_death", on_player_death)
+set_event_callback("paint", on_paint)
